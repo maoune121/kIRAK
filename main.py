@@ -16,7 +16,6 @@ intents.message_content = True
 
 # قراءة التوكن ومعرف القناة من متغيرات البيئة
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-# معرف القناة يتم قراءته كسلسلة، نقوم بتحويله لعدد صحيح إذا كان مختلف عن "0"
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # إنشاء البوت مع تعيين بادئة الأوامر
@@ -68,7 +67,7 @@ async def alert(ctx, symbol: str, target_price: float):
     await ctx.send(f"تم ضبط تنبيه لـ **{alert_data['symbol']}** عند السعر **{alert_data['target_price']}** في هذه القناة.")
     logger.debug(f"تنبيه جديد مضاف: {alert_data}")
 
-# مهمة فحص الأسعار: يتم تشغيلها مرة واحدة ثم إنهاء البوت
+# مهمة فحص الأسعار: يتم تشغيلها مرة واحدة ثم يتم الانتقال لسؤال المستخدم
 @tasks.loop(count=1)
 async def check_prices():
     logger.debug("بدء فحص الأسعار...")
@@ -107,14 +106,40 @@ async def check_prices():
         for alert_data in alerts_to_remove:
             alerts.remove(alert_data)
         save_alerts()
-    # إنهاء البوت بعد انتهاء الفحص
-    await bot.close()
 
 @bot.event
 async def on_ready():
     logger.info(f"تم تسجيل الدخول كـ {bot.user}")
-    # بدء فحص الأسعار بمجرد تسجيل الدخول
-    check_prices.start()
+    # بدء فحص الأسعار عند تسجيل الدخول
+    await check_prices.start()
+    
+    # بعد الفحص، إرسال رسالة سؤال في القناة المحددة
+    control_channel = bot.get_channel(CHANNEL_ID)
+    if control_channel:
+        await control_channel.send("هل تغلق البوت؟ (أرسل **1** للإغلاق أو **2** للاستمرار)")
+        try:
+            # انتظار رد المستخدم لمدة 60 ثانية
+            def check(m):
+                return m.channel.id == CHANNEL_ID and m.content in ["1", "2"]
+            msg = await bot.wait_for('message', timeout=60.0, check=check)
+            if msg.content == "1":
+                await control_channel.send("سيتم إغلاق البوت...")
+                await bot.close()
+            elif msg.content == "2":
+                await control_channel.send("البوت سيستمر في العمل. لإغلاقه لاحقًا، أرسل **1** في هذه القناة.")
+        except asyncio.TimeoutError:
+            await control_channel.send("انقضت المهلة، سيتم إغلاق البوت تلقائيًا.")
+            await bot.close()
 
-# تشغيل البوت
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    # التحقق من رسائل القناة المحددة للتحكم
+    if message.channel.id == CHANNEL_ID and message.content == "1":
+        await message.channel.send("سيتم إغلاق البوت...")
+        await bot.close()
+        return
+    await bot.process_commands(message)
+
 bot.run(TOKEN)
